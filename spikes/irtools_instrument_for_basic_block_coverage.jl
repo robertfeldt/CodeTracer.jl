@@ -4,7 +4,7 @@
 # We want to measure basic block coverage when testing this method:
 function f(x, y)
     # Just insert a delay so we can measure overhead more realistically below...
-    sleep(0.001)
+    sleep(0.0001)
     if x < y
         return x + y
     else
@@ -13,7 +13,8 @@ function f(x, y)
 end
 
 # We will use a coverage object to count the number of executions of each basic block.
-mutable struct BasicBlockCoverage
+abstract type CodeTracer end
+mutable struct BasicBlockCoverage <: CodeTracer
     blockexecutions::Vector{Int}
 end
 
@@ -33,11 +34,12 @@ end
 
 # Now use IRTools so we can instrument functions to insert callbacks 
 # to a tracer object that we will take in as a new first argument.
+using IRTools
 using IRTools: @code_ir, blocks, argument!, func, xcall
 
 numblocks(ir) = length(blocks(ir))
 
-function instrument!(funcname::Symbol, ir)
+function instrument!(ir)
     bs = blocks(ir)
     tracerarg = argument!(ir; at = 2) # add tracer argument to function
     for bi in eachindex(bs)
@@ -51,7 +53,7 @@ end
 
 # Get the IR, instrument it, and turn into a new lambda/function:
 old_ir = @code_ir f(2, 3)
-instrumented_ir = instrument!(:f, old_ir)
+instrumented_ir = instrument!(old_ir)
 f2 = func(instrumented_ir); # Make a new function from the instrumented ir
 
 # Ok, let's test this!
@@ -80,4 +82,23 @@ end
 using BenchmarkTools
 torig = @belapsed f(2, 3)
 t     = @belapsed f2(nothing, c, 2, 3)
-overhead = round(100.0 * (t/torig - 1.0), digits = 2) # About 17% on my machine...
+overhead = round(100.0 * (t/torig - 1.0), digits = 2) # between 3-17% on my machine...
+
+# This will not work for more complex methods with optional args, keyword args etc
+# but it is a good start:
+macro instrument(expr)
+    fname = first(expr.args)
+    args = Symbol[gensym() for _ in 1:(length(expr.args)-1)]
+    ir, newf = gensym(), gensym()
+    quote
+        oldir = IRTools.@code_ir $expr
+        newfunc = IRTools.func(instrument!(oldir))
+        $(esc(fname))(c::CodeTracer, $(args...)) = newfunc(nothing, c, $(args...))
+        newfunc # Return the func if they want to do other stuff with it...
+    end
+end
+
+#@macroexpand @instrument f(2, 3)
+@instrument f(2, 3)
+c = BasicBlockCoverage(3)
+f(c, 2, 3)
