@@ -3,6 +3,9 @@ uuid = "d68ead4e-e534-4648-bba1-4ea72e5eaf82"
 authors = ["Robert Feldt"]
 version = "0.1.0"
 
+[deps]
+IRTools = "7869d1d1-7146-5819-86e3-90919afe41df"
+
 [compat]
 julia = "1.5"
 
