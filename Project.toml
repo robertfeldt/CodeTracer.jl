@@ -1,0 +1,13 @@
+name = "CodeTracer"
+uuid = "d68ead4e-e534-4648-bba1-4ea72e5eaf82"
+authors = ["Robert Feldt"]
+version = "0.1.0"
+
+[compat]
+julia = "1.5"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
