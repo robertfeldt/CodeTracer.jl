@@ -1,6 +1,7 @@
 # Small example showing how to instrument Julia code at IR level
 # in order to prehook/posthook function calls. Then also shows
-# how to overdub calls so that we can, for example, do mutation testing.
+# how to overdub calls so that we can, for example, do mutation testing
+# using both a dynamically controlled mutator and a statically defined one.
 
 # We want to call prehook and posthook methods on a tracer for every function call
 # in a function in focus (FIF)
@@ -120,3 +121,16 @@ resetfunc!(m, 2, Main.:<)
 setfunc!(m, 3, Main.:+, Main.:*)
 r4 = f2(nothing, m, 2, 3) # returns 6 since 2*3==6
 @assert r4 == 6
+
+# But we can also do more static mutations by overriding overdub for different functions:
+struct MyStaticMutator <: CodeTracer end
+
+@inline function overdub(c::MyStaticMutator, id::Int, ::typeof(Main.:<), args...)
+    # Mutate if id 2 otherwise no mutation so call orig func
+    id == 2 && return Main.:>=(args...)
+    Main.:<(args...)
+end
+
+ms = MyStaticMutator()
+r2b = f2(nothing, ms, 2, 3) # returns -1 since 2-3==-1
+@assert r2b == -1
