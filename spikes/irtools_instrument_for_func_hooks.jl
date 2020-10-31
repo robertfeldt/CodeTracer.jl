@@ -13,22 +13,27 @@ function fif(x, y)
     end
 end
 
-# We will use a coverage object to count the number of executions of each basic block.
+# We will add a code tracer argument which is then invoked on different events
+# while executing the function. By default nothing happens on these events
+# but subtypes can override.
 abstract type CodeTracer end
+@inline enterfunction!(c::CodeTracer, func, numblocks::Int) = nothing
+@inline enterblock!(c::CodeTracer, block::Int) = nothing
+@inline prehook(c::CodeTracer, id::Int, func, args...) = nothing
+@inline overdub(c::CodeTracer, id::Int, func, args...) = func(args...)
+@inline posthook(c::CodeTracer, id::Int, res, func, args...) = nothing
 
+# Let's trace function calls by adding posthooks as well as tracing
+# function entry.
 mutable struct FunctionCallTracer <: CodeTracer
     trace::Vector{Any}
 end
 FunctionCallTracer() = FunctionCallTracer(Any[])
 
-enterfunction!(c::FunctionCallTracer, funcname, numblocks::Int) =
-    push!(c.trace, [:funcentry, funcname, numblocks])
+@inline enterfunction!(c::FunctionCallTracer, funcname, numblocks::Int) =
+    push!(c.trace, [:entry, funcname, numblocks])
 
-enterblock!(c::FunctionCallTracer, block::Int) = nothing
-
-prehook(c::FunctionCallTracer, id::Int, func, args...) = nothing
-
-posthook(c::FunctionCallTracer, id::Int, res, func, args...) =
+@inline posthook(c::FunctionCallTracer, id::Int, res, func, args...) =
     push!(c.trace, [:posthook, id, res, func, args...])
 
 # Now use IRTools so we can instrument functions to insert callbacks 
@@ -45,9 +50,12 @@ function instrument!(ir, fn = nothing)
     num = 1 # we increment this number for every call so that each call has a unique id num
     for (v, s) in ir
         if s.expr.head == :call
-            #fn = first(s.expr.args)
-            insert!(ir, v, xcall(Main, :prehook, tracerarg, num, s.expr.args...)) # fn, s.expr.args[2:end]...))
-            IRTools.insertafter!(ir, v, xcall(Main, :posthook, tracerarg, num, v, s.expr.args...)) # fn, s.expr.args[2:end]...))
+            # prehook:
+            insert!(ir, v, xcall(Main, :prehook, tracerarg, num, s.expr.args...))
+            # posthook:
+            IRTools.insertafter!(ir, v, xcall(Main, :posthook, tracerarg, num, v, s.expr.args...))
+            # overdub: 
+            ir[v] = xcall(Main, :overdub, tracerarg, num, s.expr.args...)
             num += 1
         end
     end
@@ -77,8 +85,31 @@ tr = FunctionCallTracer()
 res = f2(nothing, tr, 2, 3)
 @assert origres == res
 @assert length(tr.trace) == 4 # funcentry, posthook sleep, posthook <, posthook +
-@assert tr.trace[1][1] == :funcentry
+@assert tr.trace[1][1] == :entry
 @assert tr.trace[2][4] == Main.sleep
 @assert tr.trace[3][4] == Main.:<
 @assert tr.trace[4][4] == Main.:+
 @assert tr.trace[4][3] == 5
+
+# We can also do mutation testing via overdub. Let's even do a dynamic
+# mutation tracer which we can control flexibly from the outside.
+mutable struct DynamicFuncMutator <: CodeTracer
+    mutatedfuncs::Dict{Tuple{Int, Any}, Any}
+end
+DynamicFuncMutator() = DynamicFuncMutator(Dict{Tuple{Int, Any}, Any}())
+shouldmutate(c::DynamicFuncMutator, id::Int, func) = haskey(c.mutatedfuncs, (id, func))
+setfunc!(c::DynamicFuncMutator, id::Int, func, altfunc) = c.mutatedfuncs[(id, func)] = altfunc
+@inline function overdub(c::DynamicFuncMutator, id::Int, func, args...)
+    func2call = shouldmutate(c, id, func) ? c.mutatedfuncs[(id, func)] : func
+    func2call(args...)
+end
+
+# Now we can dynamically mutate the first comparison operator (originally <) to
+# > like so:
+m = DynamicFuncMutator()
+r1 = fif(2, 3)    # Returns 5
+r2 = f2(nothing, m, 2, 3) # also returns 5 since no mutation yet...
+@assert r2 == r1
+setfunc!(m, 2, Main.:<, Main.:>) # id num is 2 since call to sleep is 1
+r3 = f2(nothing, m, 2, 3) # returns -1 since 2-3==-1
+@assert r3 == -1
