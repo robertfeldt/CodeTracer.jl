@@ -1,5 +1,6 @@
 # Small example showing how to instrument Julia code at IR level
-# in order to prehook/posthook function calls.
+# in order to prehook/posthook function calls. Then also shows
+# how to overdub calls so that we can, for example, do mutation testing.
 
 # We want to call prehook and posthook methods on a tracer for every function call
 # in a function in focus (FIF)
@@ -98,6 +99,7 @@ mutable struct DynamicFuncMutator <: CodeTracer
 end
 DynamicFuncMutator() = DynamicFuncMutator(Dict{Tuple{Int, Any}, Any}())
 shouldmutate(c::DynamicFuncMutator, id::Int, func) = haskey(c.mutatedfuncs, (id, func))
+resetfunc!(c::DynamicFuncMutator, id::Int, func) = delete!(c.mutatedfuncs, (id, func))
 setfunc!(c::DynamicFuncMutator, id::Int, func, altfunc) = c.mutatedfuncs[(id, func)] = altfunc
 @inline function overdub(c::DynamicFuncMutator, id::Int, func, args...)
     func2call = shouldmutate(c, id, func) ? c.mutatedfuncs[(id, func)] : func
@@ -113,3 +115,8 @@ r2 = f2(nothing, m, 2, 3) # also returns 5 since no mutation yet...
 setfunc!(m, 2, Main.:<, Main.:>) # id num is 2 since call to sleep is 1
 r3 = f2(nothing, m, 2, 3) # returns -1 since 2-3==-1
 @assert r3 == -1
+# Now delete the mutation and add another one:
+resetfunc!(m, 2, Main.:<)
+setfunc!(m, 3, Main.:+, Main.:*)
+r4 = f2(nothing, m, 2, 3) # returns 6 since 2*3==6
+@assert r4 == 6
